@@ -123,43 +123,47 @@ if __name__ == "__main__":
     success = []
     failure = []
     msg = []
-    for i in cookies:
-        cookie = i
-        autherror = False
-        signerror = False
-        sign_return = None
-        me = None
+    for index, cookie in enumerate(cookies, start=1):
+        label = '第{}个账号'.format(index)
+        if not cookie.strip():
+            msg.append('{}：Cookie 为空，请检查 Secrets.COOKIE'.format(label))
+            failure.append(cookie)
+            continue
+
+        # 验证登录态
         try:
             me = getme(current, cookie)
-        except:
-            message = '第{}个账号验证失败！请检查Cookie是否过期！或者附上报错信息到 https://github.com/GamerNoTitle/wyycg-autosignin/issues 发起issue'.format(
-                cookies.index(i) + 1)
+        except Exception as e:
+            msg.append('{}验证请求异常（网络错误）：{}'.format(label, e))
             failure.append(cookie)
-            msg.append(message)
-            autherror = True
+            continue
 
-        if me.status_code != 200 and not autherror:
-            message = '第{}个账号验证失败！请检查Cookie是否过期！或者附上报错信息到 https://github.com/GamerNoTitle/wyycg-autosignin/issues 发起issue'.format(
-                cookies.index(i) + 1)
+        if me.status_code in (401, 403):
+            msg.append('{}验证失败：Cookie 已过期或无效（HTTP {}）。'
+                       '请重新抓取 Authorization 并更新仓库 Secrets.COOKIE'.format(label, me.status_code))
             failure.append(cookie)
-            msg.append(message)
-        elif me.status_code == 200:
-            try:
-                sign_return = signin(sign_url, cookie)
-            except:
-                message = '第{}个账号签到失败，回显状态码为{}，具体错误信息如下：{}'.format(cookies.index(i) + 1, sign_return.status_code, sign_return.text)
-                failure.append(cookie)
-                msg.append(message)
-                signerror = True
+            continue
+        if me.status_code != 200:
+            msg.append('{}验证失败：接口返回 HTTP {}，响应：{}'.format(
+                label, me.status_code, me.text[:200]))
+            failure.append(cookie)
+            continue
 
-            if sign_return.status_code == 200:
-                message = '第{}个账号签到成功！'.format(cookies.index(i) + 1)
-                success.append(cookie)
-                msg.append(message)
-            elif not signerror:
-                message = '第{}个账号签到失败，回显状态码为{}，具体错误信息如下：{}'.format(cookies.index(i) + 1, sign_return.status_code, sign_return.text)
-                failure.append(cookie)
-                msg.append(message)
+        # 执行签到
+        try:
+            sign_return = signin(sign_url, cookie)
+        except Exception as e:
+            msg.append('{}签到请求异常（网络错误）：{}'.format(label, e))
+            failure.append(cookie)
+            continue
+
+        if sign_return.status_code == 200:
+            msg.append('{}签到成功！'.format(label))
+            success.append(cookie)
+        else:
+            msg.append('{}签到失败：HTTP {}，响应：{}'.format(
+                label, sign_return.status_code, sign_return.text[:200]))
+            failure.append(cookie)
     outputmsg = str(msg).replace("[", '').replace(']', '').replace(',', '<br>').replace('\'', '')
     teleinfomsg = '''
     感谢使用来自GamerNoTitle的网易云游戏自动签到脚本！
@@ -207,5 +211,24 @@ if __name__ == "__main__":
     qqsend(qqkey, qqinfomsg)
     ppsend(ppkey, ppinfomsg)
     print(teleinfomsg)
-    if (len(failure) != 0):
-        raise ScriptRunError
+
+    # 把结果写到 GitHub Actions 的 Step Summary，失败原因在 run 页面顶部即可见
+    try:
+        import os
+        summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+        if summary_path:
+            lines = ['## 网易云游戏签到结果', '',
+                     '- 成功：**{}** / {}'.format(len(success), len(cookies)),
+                     '- 失败：**{}** / {}'.format(len(failure), len(cookies)), '']
+            lines += ['- {}'.format(m) for m in msg]
+            if failure:
+                lines += ['', '> 需要处理：登录态已失效。请从 cg.163.com 重新获取 '
+                          '`Authorization` 请求头，并更新仓库 Secrets 中的 `COOKIE`。']
+            with open(summary_path, 'a', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+    except Exception as e:
+        print('写入 Step Summary 失败（不影响签到）：{}'.format(e))
+
+    if failure:
+        raise ScriptRunError('{} / {} 个账号签到失败，详情见上方日志与 Step Summary'.format(
+            len(failure), len(cookies)))
