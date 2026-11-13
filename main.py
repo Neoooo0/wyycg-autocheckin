@@ -122,6 +122,7 @@ if __name__ == "__main__":
     print('检测到{}个账号，即将开始签到！'.format(len(cookies)))
     success = []
     failure = []
+    skipped = []
     msg = []
     for index, cookie in enumerate(cookies, start=1):
         label = '第{}个账号'.format(index)
@@ -160,6 +161,13 @@ if __name__ == "__main__":
         if sign_return.status_code == 200:
             msg.append('{}签到成功！'.format(label))
             success.append(cookie)
+        elif sign_return.status_code == 400:
+            # 登录态刚已通过 getme 校验（200），此时 400 属于业务层拒绝，
+            # 最常见的是「今日已签到」。同一天重复触发（定时 + 手动重跑）
+            # 不应被判为 CI 失败，否则会持续误报失败通知。
+            msg.append('{}今日已签到或请求被业务拒绝（HTTP 400），已跳过；'
+                       '登录态正常，无需更新 COOKIE'.format(label))
+            skipped.append(cookie)
         else:
             msg.append('{}签到失败：HTTP {}，响应：{}'.format(
                 label, sign_return.status_code, sign_return.text[:200]))
@@ -219,6 +227,7 @@ if __name__ == "__main__":
         if summary_path:
             lines = ['## 网易云游戏签到结果', '',
                      '- 成功：**{}** / {}'.format(len(success), len(cookies)),
+                     '- 跳过（今日已签到）：**{}** / {}'.format(len(skipped), len(cookies)),
                      '- 失败：**{}** / {}'.format(len(failure), len(cookies)), '']
             lines += ['- {}'.format(m) for m in msg]
             if failure:
